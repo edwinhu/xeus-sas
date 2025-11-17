@@ -71,21 +71,40 @@ namespace xeus_sas
 
             if (!config.silent)
             {
-                // Determine what to display
-                if (should_show_listing(result))
+                // Check if we have HTML output
+                if (result.has_html && !result.html_output.empty())
                 {
-                    // Show listing output
-                    if (!result.listing.empty())
+                    // Display rich HTML output using display_data
+                    nl::json html_data;
+                    html_data["text/html"] = result.html_output;
+
+                    // Also include plain text fallback (log)
+                    if (!result.log.empty())
                     {
-                        publish_stream("stdout", result.listing);
+                        html_data["text/plain"] = result.log;
                     }
+
+                    display_data(html_data, nl::json::object(), nl::json::object());
                 }
                 else
                 {
-                    // Show log (for debugging or when no listing)
-                    if (!result.log.empty())
+                    // Fallback to plain text output
+                    // Determine what to display
+                    if (should_show_listing(result))
                     {
-                        publish_stream("stdout", colorize_log(result.log));
+                        // Show listing output
+                        if (!result.listing.empty())
+                        {
+                            publish_stream("stdout", result.listing);
+                        }
+                    }
+                    else
+                    {
+                        // Show log (for debugging or when no listing)
+                        if (!result.log.empty())
+                        {
+                            publish_stream("stdout", colorize_log(result.log));
+                        }
                     }
                 }
 

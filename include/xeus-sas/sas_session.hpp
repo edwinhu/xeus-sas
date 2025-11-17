@@ -17,7 +17,9 @@ namespace xeus_sas
     struct execution_result
     {
         std::string log;                      // SAS log output
-        std::string listing;                  // LST/ODS output
+        std::string listing;                  // LST/ODS output (plain text, deprecated)
+        std::string html_output;              // HTML5 output from ODS
+        bool has_html;                        // Flag to indicate HTML vs TEXT mode
         bool is_error;                        // Error flag
         int error_code;                       // SAS error code
         std::string error_message;            // Error details

@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdio>
 #include <memory>
+#include <regex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -17,6 +18,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <poll.h>
 #endif
 
 namespace xeus_sas
@@ -42,6 +45,7 @@ namespace xeus_sas
         pid_t m_sas_pid;
         FILE* m_sas_stdin;
         FILE* m_sas_stdout;
+        FILE* m_sas_stderr;
 
         void initialize_session();
         std::string find_sas_executable(const std::string& path_hint);
@@ -54,6 +58,7 @@ namespace xeus_sas
         , m_sas_pid(-1)
         , m_sas_stdin(nullptr)
         , m_sas_stdout(nullptr)
+        , m_sas_stderr(nullptr)
     {
         // Find SAS executable
         if (m_sas_path.empty())
@@ -119,11 +124,12 @@ namespace xeus_sas
         std::cout << "Initializing persistent SAS session..." << std::endl;
 
 #ifndef _WIN32
-        // Create pipes for stdin and stdout
+        // Create pipes for stdin, stdout, and stderr
         int stdin_pipe[2];
         int stdout_pipe[2];
+        int stderr_pipe[2];
 
-        if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0)
+        if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0)
         {
             throw std::runtime_error("Failed to create pipes for SAS communication");
         }
@@ -133,15 +139,17 @@ namespace xeus_sas
 
         if (m_sas_pid == 0)
         {
-            // Child process - redirect stdin/stdout and exec SAS
+            // Child process - redirect stdin/stdout/stderr and exec SAS
             dup2(stdin_pipe[0], STDIN_FILENO);
             dup2(stdout_pipe[1], STDOUT_FILENO);
-            dup2(stdout_pipe[1], STDERR_FILENO);
+            dup2(stderr_pipe[1], STDERR_FILENO);
 
             close(stdin_pipe[0]);
             close(stdin_pipe[1]);
             close(stdout_pipe[0]);
             close(stdout_pipe[1]);
+            close(stderr_pipe[0]);
+            close(stderr_pipe[1]);
 
             // Start SAS in interactive mode
             // -nodms: no display manager
@@ -160,11 +168,13 @@ namespace xeus_sas
             // Parent process - setup file streams
             close(stdin_pipe[0]);
             close(stdout_pipe[1]);
+            close(stderr_pipe[1]);
 
             m_sas_stdin = fdopen(stdin_pipe[1], "w");
             m_sas_stdout = fdopen(stdout_pipe[0], "r");
+            m_sas_stderr = fdopen(stderr_pipe[0], "r");
 
-            if (!m_sas_stdin || !m_sas_stdout)
+            if (!m_sas_stdin || !m_sas_stdout || !m_sas_stderr)
             {
                 throw std::runtime_error("Failed to create file streams for SAS communication");
             }
@@ -202,37 +212,127 @@ namespace xeus_sas
         static int exec_counter = 0;
         std::string marker = "XEUS_SAS_END_" + std::to_string(++exec_counter);
 
-        // Send code to SAS
-        fprintf(m_sas_stdin, "%s\n", code.c_str());
+        // Wrap code with ODS HTML5 commands for rich output
+        // Following sas_kernel's approach:
+        // - Close default listing destination
+        // - Open HTML5 destination to stdout
+        // - Enable inline graphics as base64
+        // - Execute user code
+        // - Close HTML5 and restore listing
+        std::stringstream wrapped_code;
+        wrapped_code << "ods listing close;\n"
+                     << "ods html5 (id=xeus_sas_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue;\n"
+                     << "ods graphics on / outputfmt=png;\n"
+                     << "\n"
+                     << code << "\n"
+                     << "\n"
+                     << "ods html5 (id=xeus_sas_internal) close;\n"
+                     << "ods listing;\n";
 
-        // Send marker to detect end of output
+        // Send wrapped code to SAS
+        fprintf(m_sas_stdin, "%s\n", wrapped_code.str().c_str());
+
+        // Send marker to stderr (log stream) to detect end of output
         // Note: We add a DATA _null_; RUN; after the marker to force SAS to flush output
         fprintf(m_sas_stdin, "%%put %s;\n", marker.c_str());
         fprintf(m_sas_stdin, "DATA _null_; run;\n");
         fflush(m_sas_stdin);
 
-        // Read output until we see the marker
-        std::string output;
+        // Read both stdout (HTML) and stderr (log) until we see the marker
+        // We need to read both streams to avoid deadlock
+        std::string html_output;
+        std::string log_output;
         char buffer[4096];
         bool found_marker = false;
 
-        while (!found_marker && fgets(buffer, sizeof(buffer), m_sas_stdout))
-        {
-            std::string line(buffer);
+        // Set stderr to non-blocking mode for polling
+        int stderr_fd = fileno(m_sas_stderr);
+        int stdout_fd = fileno(m_sas_stdout);
+        int stderr_flags = fcntl(stderr_fd, F_GETFL, 0);
+        int stdout_flags = fcntl(stdout_fd, F_GETFL, 0);
+        fcntl(stderr_fd, F_SETFL, stderr_flags | O_NONBLOCK);
+        fcntl(stdout_fd, F_SETFL, stdout_flags | O_NONBLOCK);
 
-            // Check if this line contains our marker
-            if (line.find(marker) != std::string::npos)
+        // Poll both streams until we find the marker in stderr
+        struct pollfd fds[2];
+        fds[0].fd = stdout_fd;
+        fds[0].events = POLLIN;
+        fds[1].fd = stderr_fd;
+        fds[1].events = POLLIN;
+
+        while (!found_marker)
+        {
+            int poll_result = poll(fds, 2, 1000); // 1 second timeout
+            if (poll_result < 0)
             {
-                found_marker = true;
-                break;  // Don't add marker line to output
+                break; // Error
+            }
+            else if (poll_result == 0)
+            {
+                continue; // Timeout, try again
             }
 
-            // Only add non-marker lines to output
-            output += line;
+            // Read from stdout (HTML)
+            if (fds[0].revents & POLLIN)
+            {
+                if (fgets(buffer, sizeof(buffer), m_sas_stdout))
+                {
+                    html_output += buffer;
+                }
+            }
+
+            // Read from stderr (log)
+            if (fds[1].revents & POLLIN)
+            {
+                if (fgets(buffer, sizeof(buffer), m_sas_stderr))
+                {
+                    std::string line(buffer);
+
+                    // Check if this line contains our marker
+                    if (line.find(marker) != std::string::npos)
+                    {
+                        found_marker = true;
+                        break;  // Don't add marker line to log
+                    }
+
+                    log_output += line;
+                }
+            }
         }
 
-        // Parse and return
-        return parse_execution_output(output);
+        // Restore blocking mode
+        fcntl(stderr_fd, F_SETFL, stderr_flags);
+        fcntl(stdout_fd, F_SETFL, stdout_flags);
+
+        // Create result with both HTML and log
+        execution_result result;
+        result.log = log_output;
+        result.html_output = html_output;
+
+        // Detect if we have HTML output
+        result.has_html = (html_output.find("<!DOCTYPE html>") != std::string::npos ||
+                          html_output.find("<html") != std::string::npos);
+
+        // Check for errors in log
+        int error_code = 0;
+        result.is_error = contains_error(result.log, error_code);
+        result.error_code = error_code;
+
+        if (result.is_error)
+        {
+            // Extract error message
+            std::regex error_regex(R"(ERROR:?\s*(.+))");
+            std::smatch match;
+            if (std::regex_search(result.log, match, error_regex))
+            {
+                result.error_message = match[1].str();
+            }
+        }
+
+        // Extract graph files from log
+        result.graph_files = extract_graph_files(result.log);
+
+        return result;
 #else
         // Fallback to batch mode on Windows
         std::string output = run_sas_batch(code);
@@ -362,6 +462,13 @@ namespace xeus_sas
         {
             fclose(m_sas_stdout);
             m_sas_stdout = nullptr;
+        }
+
+        // Close stderr pipe
+        if (m_sas_stderr)
+        {
+            fclose(m_sas_stderr);
+            m_sas_stderr = nullptr;
         }
 
         // Wait for SAS process to terminate
