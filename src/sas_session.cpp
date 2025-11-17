@@ -111,14 +111,124 @@ namespace xeus_sas
         return "";
     }
 
+    void sas_session::impl::initialize_session()
+    {
+        if (m_initialized)
+            return;
+
+        std::cout << "Initializing persistent SAS session..." << std::endl;
+
+#ifndef _WIN32
+        // Create pipes for stdin and stdout
+        int stdin_pipe[2];
+        int stdout_pipe[2];
+
+        if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0)
+        {
+            throw std::runtime_error("Failed to create pipes for SAS communication");
+        }
+
+        // Fork and exec SAS
+        m_sas_pid = fork();
+
+        if (m_sas_pid == 0)
+        {
+            // Child process - redirect stdin/stdout and exec SAS
+            dup2(stdin_pipe[0], STDIN_FILENO);
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            dup2(stdout_pipe[1], STDERR_FILENO);
+
+            close(stdin_pipe[0]);
+            close(stdin_pipe[1]);
+            close(stdout_pipe[0]);
+            close(stdout_pipe[1]);
+
+            // Start SAS in interactive mode
+            // -nodms: no display manager
+            // -stdio: use stdin/stdout for I/O
+            // -nonews: suppress startup news
+            execlp(m_sas_path.c_str(), m_sas_path.c_str(),
+                   "-nodms", "-stdio", "-nonews", nullptr);
+
+            // If exec fails
+            std::cerr << "Failed to execute SAS: " << m_sas_path << std::endl;
+            exit(1);
+        }
+        else if (m_sas_pid > 0)
+        {
+            // Parent process - setup file streams
+            close(stdin_pipe[0]);
+            close(stdout_pipe[1]);
+
+            m_sas_stdin = fdopen(stdin_pipe[1], "w");
+            m_sas_stdout = fdopen(stdout_pipe[0], "r");
+
+            if (!m_sas_stdin || !m_sas_stdout)
+            {
+                throw std::runtime_error("Failed to create file streams for SAS communication");
+            }
+
+            // Set stdin to line buffering for immediate writes
+            setvbuf(m_sas_stdin, nullptr, _IOLBF, 0);
+
+            m_initialized = true;
+            std::cout << "Persistent SAS session initialized (PID: " << m_sas_pid << ")" << std::endl;
+        }
+        else
+        {
+            throw std::runtime_error("Failed to fork process for SAS");
+        }
+#else
+        throw std::runtime_error("Windows not yet supported for persistent sessions");
+#endif
+    }
+
     execution_result sas_session::impl::execute(const std::string& code)
     {
-        // For Phase 1, use batch mode execution
-        // Later phases will implement interactive session
-        std::string output = run_sas_batch(code);
+        // Initialize persistent session if not already done
+        if (!m_initialized)
+        {
+            initialize_session();
+        }
 
-        // Parse output
+#ifndef _WIN32
+        // Generate unique marker for this execution
+        static int exec_counter = 0;
+        std::string marker = "XEUS_SAS_END_" + std::to_string(++exec_counter);
+
+        // Send code to SAS
+        fprintf(m_sas_stdin, "%s\n", code.c_str());
+
+        // Send marker to detect end of output
+        fprintf(m_sas_stdin, "%%put %s;\n", marker.c_str());
+        fflush(m_sas_stdin);
+
+        // Read output until we see the marker
+        std::string output;
+        char buffer[4096];
+        bool found_marker = false;
+
+        while (!found_marker && fgets(buffer, sizeof(buffer), m_sas_stdout))
+        {
+            std::string line(buffer);
+
+            // Check if this line contains our marker
+            if (line.find(marker) != std::string::npos)
+            {
+                found_marker = true;
+                break;
+            }
+
+            output += line;
+        }
+
+        // Parse and return
         return parse_execution_output(output);
+#else
+        // Fallback to batch mode on Windows
+        std::string output = run_sas_batch(code);
+        return parse_execution_output(output);
+#endif
     }
 
     std::string sas_session::impl::run_sas_batch(const std::string& code)
@@ -223,14 +333,59 @@ namespace xeus_sas
 
     void sas_session::impl::shutdown()
     {
-        // For batch mode, nothing to clean up
-        // Future: kill interactive session if running
+        if (!m_initialized)
+            return;
+
+        std::cout << "Shutting down SAS session..." << std::endl;
+
+#ifndef _WIN32
+        // Send ENDSAS command to gracefully terminate SAS
+        if (m_sas_stdin)
+        {
+            fprintf(m_sas_stdin, "endsas;\n");
+            fflush(m_sas_stdin);
+            fclose(m_sas_stdin);
+            m_sas_stdin = nullptr;
+        }
+
+        // Close stdout pipe
+        if (m_sas_stdout)
+        {
+            fclose(m_sas_stdout);
+            m_sas_stdout = nullptr;
+        }
+
+        // Wait for SAS process to terminate
+        if (m_sas_pid > 0)
+        {
+            int status;
+            waitpid(m_sas_pid, &status, 0);
+            std::cout << "SAS process terminated (PID: " << m_sas_pid << ")" << std::endl;
+            m_sas_pid = -1;
+        }
+#endif
+
+        m_initialized = false;
     }
 
     void sas_session::impl::interrupt()
     {
-        // For batch mode, not applicable
-        // Future: send SIGINT to SAS process
+        if (!m_initialized || m_sas_pid <= 0)
+            return;
+
+        std::cout << "Interrupting SAS session..." << std::endl;
+
+#ifndef _WIN32
+        // Send SIGINT to SAS process
+        if (kill(m_sas_pid, SIGINT) == 0)
+        {
+            std::cout << "Interrupt signal sent to SAS (PID: " << m_sas_pid << ")" << std::endl;
+        }
+        else
+        {
+            std::cerr << "Failed to send interrupt signal to SAS" << std::endl;
+        }
+#endif
     }
 
     std::string sas_session::impl::get_macro(const std::string& name)
