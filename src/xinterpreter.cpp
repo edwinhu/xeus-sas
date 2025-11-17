@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <atomic>
 
 namespace xeus_sas
 {
@@ -24,6 +25,37 @@ namespace xeus_sas
     interpreter::~interpreter()
     {
         // Cleanup handled by unique_ptr
+    }
+
+    void interpreter::handle_interrupt()
+    {
+        std::cerr << "\n=== INTERRUPT HANDLER CALLED ===" << std::endl;
+
+        if (m_session)
+        {
+            std::cerr << "Restarting SAS session due to interrupt..." << std::endl;
+
+            // Restart the SAS session (shutdown + reinitialize)
+            // This is necessary because SAS running in batch mode (-stdio)
+            // does not support graceful interruption. SIGINT would kill the
+            // child SAS process, breaking the kernel connection.
+            m_session->restart();
+
+            std::cerr << "=== SAS SESSION RESTARTED ===" << std::endl;
+            std::cerr << "WARNING: Session state lost (datasets, macro variables cleared)" << std::endl;
+            std::cerr << "=================================" << std::endl;
+
+            // Publish warning to user via stderr stream
+            publish_stream("stderr",
+                "\n⚠️  Kernel interrupted - SAS session restarted\n"
+                "    Session state has been lost (WORK datasets, macro variables)\n"
+                "    You can continue using the kernel normally.\n"
+            );
+        }
+        else
+        {
+            std::cerr << "WARNING: Interrupt received but no active session" << std::endl;
+        }
     }
 
     void interpreter::configure_impl()
@@ -44,6 +76,13 @@ namespace xeus_sas
         nl::json user_expressions
     )
     {
+        // Check if interrupt was requested before execution
+        if (g_interrupt_requested.exchange(false, std::memory_order_acquire))
+        {
+            // Handle interrupt before executing new code
+            handle_interrupt();
+        }
+
         // Execute code in SAS session
         auto result = m_session->execute(code);
 

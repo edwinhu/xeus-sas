@@ -3,11 +3,16 @@
 
 #include <memory>
 #include <string>
+#include <atomic>
 
 #include "xeus/xinterpreter.hpp"
 #include "nlohmann/json.hpp"
 
 namespace nl = nlohmann;
+
+// Global flag to indicate interrupt was requested
+// Defined in main.cpp, accessed by interpreter
+extern std::atomic<bool> g_interrupt_requested;
 
 namespace xeus_sas
 {
@@ -43,6 +48,16 @@ namespace xeus_sas
          * @brief Destructor - ensures clean shutdown
          */
         virtual ~interpreter();
+
+        /**
+         * @brief Handle interrupt request
+         *
+         * Called when SIGINT is received. Restarts the SAS session to recover
+         * from interrupt (since SAS batch mode doesn't support graceful interrupt).
+         *
+         * WARNING: This will lose all SAS session state (datasets, macro variables).
+         */
+        void handle_interrupt();
 
     private:
         /**
