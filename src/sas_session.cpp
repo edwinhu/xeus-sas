@@ -153,11 +153,16 @@ namespace xeus_sas
 
             // Start SAS in interactive mode
             // -nodms: no display manager
-            // -stdio: use stdin/stdout for I/O
+            // -rsasuser: reuse sasuser library (faster startup)
+            // -noovp: no OVP processing
+            // -nosyntaxcheck: no pre-execution syntax check (faster execution)
             // -nonews: suppress startup news
-            // -nosource: suppress source code echo in log
+            // -noaltlog: no alternate log
+            // -noaltprint: no alternate print
+            // -stdio: use stdin/stdout for I/O
             execlp(m_sas_path.c_str(), m_sas_path.c_str(),
-                   "-nodms", "-stdio", "-nonews", "-nosource", nullptr);
+                   "-nodms", "-rsasuser", "-noovp", "-nosyntaxcheck",
+                   "-nonews", "-noaltlog", "-noaltprint", "-stdio", nullptr);
 
             // If exec fails
             std::cerr << "Failed to execute SAS: " << m_sas_path << std::endl;
