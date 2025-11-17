@@ -1,0 +1,15 @@
+{
+    "display_name": "SAS",
+    "argv": [
+        "@CMAKE_INSTALL_PREFIX@/bin/xsas",
+        "-f",
+        "{connection_file}"
+    ],
+    "language": "sas",
+    "interrupt_mode": "signal",
+    "env": {},
+    "metadata": {
+        "debugger": false,
+        "url": "https://github.com/jupyter-xeus/xeus-sas"
+    }
+}

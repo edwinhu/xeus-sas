@@ -1,0 +1,72 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+!cmake/*.cmake
+
+# Compiled files
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+xsas
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+Testing/
+test_detail.xml
+*.gcov
+*.gcda
+*.gcno
+
+# Installation
+install/
+install_manifest.txt
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# SAS temporary files
+*.log
+*.lst
+*.sas7bdat
+*.sas7bcat
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+.pytest_cache/
+
+# Documentation
+docs/_build/
+docs/generated/
+*.pdf
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+# pixi environments
+.pixi/*
+!.pixi/config.toml
