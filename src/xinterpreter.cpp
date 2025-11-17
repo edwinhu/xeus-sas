@@ -74,6 +74,38 @@ namespace xeus_sas
                 // Check if we have HTML output
                 if (result.has_html && !result.html_output.empty())
                 {
+                    // === DEBUG LOGGING: HTML BEING SENT ===
+                    std::cerr << "=== XINTERPRETER: HTML DEBUG INFO ===" << std::endl;
+                    std::cerr << "HTML Length: " << result.html_output.length() << std::endl;
+                    std::cerr << "First 300 chars: " << result.html_output.substr(0, 300) << std::endl;
+                    if (result.html_output.length() > 300)
+                    {
+                        size_t start = result.html_output.length() > 300 ? result.html_output.length() - 300 : 0;
+                        std::cerr << "Last 300 chars: " << result.html_output.substr(start) << std::endl;
+                    }
+                    std::cerr << "Contains <!DOCTYPE: " << (result.html_output.find("<!DOCTYPE") != std::string::npos) << std::endl;
+                    std::cerr << "Contains </html>: " << (result.html_output.find("</html>") != std::string::npos) << std::endl;
+                    std::cerr << "Starts with <!DOCTYPE: " << (result.html_output.substr(0, 15) == "<!DOCTYPE html>") << std::endl;
+                    std::cerr << "Ends with </html>: " << (result.html_output.length() >= 7 && result.html_output.substr(result.html_output.length()-7) == "</html>") << std::endl;
+
+                    // Count table rows
+                    size_t tr_count = 0;
+                    size_t pos = 0;
+                    while ((pos = result.html_output.find("</tr>", pos)) != std::string::npos)
+                    {
+                        tr_count++;
+                        pos += 5;
+                    }
+                    std::cerr << "Number of </tr> tags: " << tr_count << std::endl;
+
+                    // Check for table structure
+                    std::cerr << "Contains <table: " << (result.html_output.find("<table") != std::string::npos) << std::endl;
+                    std::cerr << "Contains </table>: " << (result.html_output.find("</table>") != std::string::npos) << std::endl;
+                    std::cerr << "Contains <colgroup>: " << (result.html_output.find("<colgroup>") != std::string::npos) << std::endl;
+                    std::cerr << "Contains <thead>: " << (result.html_output.find("<thead>") != std::string::npos) << std::endl;
+                    std::cerr << "Contains <tbody>: " << (result.html_output.find("<tbody>") != std::string::npos) << std::endl;
+                    std::cerr << "======================================" << std::endl;
+
                     // Display rich HTML output using display_data
                     nl::json html_data;
                     html_data["text/html"] = result.html_output;
@@ -83,6 +115,17 @@ namespace xeus_sas
                     {
                         html_data["text/plain"] = result.log;
                     }
+
+                    // Debug: Check what's in the JSON
+                    std::cerr << "=== JSON DEBUG INFO ===" << std::endl;
+                    std::cerr << "JSON has text/html key: " << html_data.contains("text/html") << std::endl;
+                    if (html_data.contains("text/html"))
+                    {
+                        std::string json_html = html_data["text/html"].get<std::string>();
+                        std::cerr << "JSON text/html length: " << json_html.length() << std::endl;
+                        std::cerr << "JSON text/html matches result.html_output: " << (json_html == result.html_output) << std::endl;
+                    }
+                    std::cerr << "=======================" << std::endl;
 
                     display_data(html_data, nl::json::object(), nl::json::object());
                 }

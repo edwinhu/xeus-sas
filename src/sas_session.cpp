@@ -181,6 +181,9 @@ namespace xeus_sas
 
             // Set stdin to line buffering for immediate writes
             setvbuf(m_sas_stdin, nullptr, _IOLBF, 0);
+            // CRITICAL: Set stdout and stderr to unbuffered since we use read() on their fds
+            setvbuf(m_sas_stdout, nullptr, _IONBF, 0);
+            setvbuf(m_sas_stderr, nullptr, _IONBF, 0);
 
             // Note: SAS outputs startup messages (copyright, version, etc.) when started
             // with -stdio. These will appear in the first execution's output.
@@ -219,15 +222,19 @@ namespace xeus_sas
         // - Enable inline graphics as base64
         // - Execute user code
         // - Close HTML5 and restore listing
+        std::cerr << "\n=== CODE RECEIVED ===\n" << code << "\n=====================\n" << std::endl;
+
         std::stringstream wrapped_code;
         wrapped_code << "ods listing close;\n"
-                     << "ods html5 (id=xeus_sas_internal) file=stdout options(bitmap_mode='inline') device=svg style=HTMLBlue;\n"
+                     << "ods html5 (id=xeus_sas_internal) file=stdout style=Default;\n"
                      << "ods graphics on / outputfmt=png;\n"
                      << "\n"
                      << code << "\n"
                      << "\n"
                      << "ods html5 (id=xeus_sas_internal) close;\n"
-                     << "ods listing;\n";
+                     << "ods listing;\n"
+                     << "* Force flush of all output before marker;\n"
+                     << "DATA _null_; run;\n";
 
         // Send wrapped code to SAS
         fprintf(m_sas_stdin, "%s\n", wrapped_code.str().c_str());
@@ -267,7 +274,9 @@ namespace xeus_sas
 
         // Continue reading until we have both marker AND complete HTML
         int timeout_count = 0;
-        const int max_timeouts = 10;  // Allow up to 10 seconds total
+        int consecutive_empty_reads = 0;
+        const int max_timeouts = 30;  // Allow up to 30 seconds total
+        const int max_empty_reads = 5;  // If we get 5 consecutive empty reads, we're probably done
 
         while (!found_marker || (has_html_start && !found_html_end))
         {
@@ -279,7 +288,27 @@ namespace xeus_sas
             }
             else if (poll_result == 0)
             {
+                // No data available right now
                 timeout_count++;
+                consecutive_empty_reads++;
+
+                // If we have the marker and either no HTML or found HTML end, we can stop
+                if (found_marker && (!has_html_start || found_html_end))
+                {
+                    break;
+                }
+
+                // If we've had too many consecutive empty reads after finding marker, give up
+                if (found_marker && consecutive_empty_reads >= max_empty_reads)
+                {
+                    std::cerr << "WARNING: No more data after " << consecutive_empty_reads << " empty reads" << std::endl;
+                    std::cerr << "  Marker found: " << found_marker << std::endl;
+                    std::cerr << "  HTML start found: " << has_html_start << std::endl;
+                    std::cerr << "  HTML end found: " << found_html_end << std::endl;
+                    std::cerr << "  HTML length so far: " << html_output.length() << std::endl;
+                    break;
+                }
+
                 if (timeout_count >= max_timeouts)
                 {
                     std::cerr << "WARNING: Timeout waiting for complete SAS output" << std::endl;
@@ -291,12 +320,17 @@ namespace xeus_sas
                 continue; // Timeout, try again
             }
 
+            // We got data, reset empty read counter
+            consecutive_empty_reads = 0;
+
             // Read from stdout (HTML)
             if (fds[0].revents & POLLIN)
             {
-                if (fgets(buffer, sizeof(buffer), m_sas_stdout))
+                ssize_t bytes_read = read(stdout_fd, buffer, sizeof(buffer) - 1);
+                if (bytes_read > 0)
                 {
-                    html_output += buffer;
+                    buffer[bytes_read] = '\0';  // Null terminate
+                    html_output.append(buffer, bytes_read);
 
                     // Check for HTML document markers
                     if (!has_html_start &&
@@ -320,20 +354,33 @@ namespace xeus_sas
             // Read from stderr (log)
             if (fds[1].revents & POLLIN)
             {
-                if (fgets(buffer, sizeof(buffer), m_sas_stderr))
+                ssize_t bytes_read = read(stderr_fd, buffer, sizeof(buffer) - 1);
+                if (bytes_read > 0)
                 {
-                    std::string line(buffer);
+                    buffer[bytes_read] = '\0';  // Null terminate
+                    std::string chunk(buffer, bytes_read);
 
-                    // Check if this line contains our marker
-                    if (line.find(marker) != std::string::npos)
+                    // Check if this chunk contains our marker
+                    if (chunk.find(marker) != std::string::npos)
                     {
                         found_marker = true;
-                        // Don't break yet - continue reading if HTML is incomplete
-                        // Don't add marker line to log
+                        // Don't add the marker line to log - split and remove it
+                        size_t marker_pos = chunk.find(marker);
+                        size_t line_start = chunk.rfind('\n', marker_pos);
+                        if (line_start != std::string::npos)
+                        {
+                            log_output += chunk.substr(0, line_start + 1);
+                        }
+                        // Skip the marker line and add anything after
+                        size_t line_end = chunk.find('\n', marker_pos);
+                        if (line_end != std::string::npos && line_end + 1 < chunk.length())
+                        {
+                            log_output += chunk.substr(line_end + 1);
+                        }
                     }
                     else
                     {
-                        log_output += line;
+                        log_output += chunk;
                     }
                 }
             }
@@ -355,6 +402,17 @@ namespace xeus_sas
 
         if (has_html_start)
         {
+            // === DEBUG: Log raw HTML output before extraction ===
+            std::cerr << "\n=== SAS_SESSION: RAW HTML OUTPUT DEBUG ===" << std::endl;
+            std::cerr << "Raw HTML output length: " << html_output.length() << std::endl;
+            std::cerr << "First 400 chars: " << html_output.substr(0, std::min<size_t>(400, html_output.length())) << std::endl;
+            if (html_output.length() > 400)
+            {
+                size_t start = html_output.length() > 400 ? html_output.length() - 400 : 0;
+                std::cerr << "Last 400 chars: " << html_output.substr(start) << std::endl;
+            }
+            std::cerr << "==========================================\n" << std::endl;
+
             // Find HTML document boundaries
             size_t html_start = html_output.find("<!DOCTYPE html>");
             if (html_start == std::string::npos)
@@ -364,11 +422,210 @@ namespace xeus_sas
 
             size_t html_end = html_output.rfind("</html>");  // Use rfind for LAST occurrence
 
+            std::cerr << "=== SAS_SESSION: HTML EXTRACTION DEBUG ===" << std::endl;
+            std::cerr << "html_start position: " << html_start << std::endl;
+            std::cerr << "html_end position: " << html_end << std::endl;
+
             if (html_start != std::string::npos && html_end != std::string::npos)
             {
                 html_end += 7;  // Include "</html>"
                 clean_html = html_output.substr(html_start, html_end - html_start);
                 has_html = true;
+
+                // Post-process HTML to fix euporie rendering issues
+                // Merge multiple colgroups into one (SAS splits rowheader from data columns)
+                size_t colgroup_pos = 0;
+                int colgroup_count = 0;
+                int total_cols = 0;
+                std::vector<size_t> colgroup_positions;
+
+                // Find all colgroups and count columns
+                while ((colgroup_pos = clean_html.find("<colgroup>", colgroup_pos)) != std::string::npos)
+                {
+                    colgroup_positions.push_back(colgroup_pos);
+                    colgroup_count++;
+
+                    // Count cols in this colgroup
+                    size_t colgroup_end = clean_html.find("</colgroup>", colgroup_pos);
+                    size_t search_pos = colgroup_pos;
+                    while ((search_pos = clean_html.find("<col/>", search_pos)) != std::string::npos && search_pos < colgroup_end)
+                    {
+                        total_cols++;
+                        search_pos += 6;
+                    }
+
+                    colgroup_pos = colgroup_end;
+                }
+
+                // If we have multiple colgroups, merge them into one
+                if (colgroup_count > 1 && colgroup_positions.size() >= 2)
+                {
+                    std::cerr << "Merging " << colgroup_count << " colgroups with " << total_cols << " total columns" << std::endl;
+
+                    // Build new single colgroup
+                    std::string new_colgroup = "<colgroup>";
+                    for (int i = 0; i < total_cols; i++)
+                    {
+                        new_colgroup += "<col/>";
+                    }
+                    new_colgroup += "</colgroup>";
+
+                    // Find the range to replace (first colgroup start to last colgroup end)
+                    size_t first_colgroup = colgroup_positions[0];
+                    size_t last_colgroup_end = clean_html.find("</colgroup>", colgroup_positions.back()) + 11; // +11 for "</colgroup>"
+
+                    // Replace
+                    clean_html = clean_html.substr(0, first_colgroup) + new_colgroup + clean_html.substr(last_colgroup_end);
+                }
+
+                // Additional simplification: remove inline styles that might confuse terminal renderers
+                // Remove style attributes from table and other elements
+                size_t style_pos = 0;
+                while ((style_pos = clean_html.find(" style=", style_pos)) != std::string::npos)
+                {
+                    size_t quote_start = clean_html.find("\"", style_pos);
+                    if (quote_start != std::string::npos)
+                    {
+                        size_t quote_end = clean_html.find("\"", quote_start + 1);
+                        if (quote_end != std::string::npos)
+                        {
+                            clean_html.erase(style_pos, quote_end - style_pos + 1);
+                        }
+                        else
+                        {
+                            style_pos++;
+                        }
+                    }
+                    else
+                    {
+                        style_pos++;
+                    }
+                }
+
+                // Remove aria-label attributes (accessibility but not needed for terminal)
+                style_pos = 0;
+                while ((style_pos = clean_html.find(" aria-label=", style_pos)) != std::string::npos)
+                {
+                    size_t quote_start = clean_html.find("\"", style_pos);
+                    if (quote_start != std::string::npos)
+                    {
+                        size_t quote_end = clean_html.find("\"", quote_start + 1);
+                        if (quote_end != std::string::npos)
+                        {
+                            clean_html.erase(style_pos, quote_end - style_pos + 1);
+                        }
+                        else
+                        {
+                            style_pos++;
+                        }
+                    }
+                    else
+                    {
+                        style_pos++;
+                    }
+                }
+
+                // CRITICAL FIX: Move thead content to be first row of tbody
+                // Terminal renderers like euporie may treat thead as floating/fixed
+                // This causes misalignment with the table body
+                size_t thead_start = clean_html.find("<thead>");
+                size_t tbody_start = clean_html.find("<tbody>");
+
+                if (thead_start != std::string::npos && tbody_start != std::string::npos)
+                {
+                    size_t thead_end = clean_html.find("</thead>", thead_start);
+                    if (thead_end != std::string::npos)
+                    {
+                        // Extract the header row content (between <thead> and </thead>)
+                        size_t content_start = thead_start + 7; // After <thead>
+                        std::string header_content = clean_html.substr(content_start, thead_end - content_start);
+
+                        // Remove the entire <thead>...</thead> section
+                        clean_html.erase(thead_start, thead_end + 8 - thead_start);
+
+                        // Find tbody again (position changed after erase)
+                        tbody_start = clean_html.find("<tbody>");
+                        if (tbody_start != std::string::npos)
+                        {
+                            // Insert header content right after <tbody>
+                            clean_html.insert(tbody_start + 7, header_content);
+                            std::cerr << "Moved thead content to first row of tbody" << std::endl;
+                        }
+                    }
+                }
+
+                // Remove empty caption elements that create extra spacing
+                // But keep captions with actual text content
+                size_t caption_pos = 0;
+                while ((caption_pos = clean_html.find("<caption", caption_pos)) != std::string::npos)
+                {
+                    size_t caption_end = clean_html.find("</caption>", caption_pos);
+                    if (caption_end != std::string::npos)
+                    {
+                        // Find where caption tag ends (could have attributes)
+                        size_t tag_close = clean_html.find(">", caption_pos);
+                        if (tag_close != std::string::npos && tag_close < caption_end)
+                        {
+                            // Extract text between <caption...> and </caption>
+                            std::string caption_text = clean_html.substr(tag_close + 1, caption_end - tag_close - 1);
+
+                            // Check if caption is empty or whitespace-only
+                            bool is_empty = true;
+                            for (char c : caption_text)
+                            {
+                                if (!std::isspace(static_cast<unsigned char>(c)))
+                                {
+                                    is_empty = false;
+                                    break;
+                                }
+                            }
+
+                            if (is_empty)
+                            {
+                                // Remove empty caption
+                                clean_html.erase(caption_pos, caption_end + 10 - caption_pos);
+                                std::cerr << "Removed empty caption element" << std::endl;
+                            }
+                            else
+                            {
+                                // Keep caption with content
+                                std::cerr << "Kept caption with text: " << caption_text.substr(0, 30) << "..." << std::endl;
+                                caption_pos = caption_end + 10;
+                            }
+                        }
+                        else
+                        {
+                            caption_pos++;
+                        }
+                    }
+                    else
+                    {
+                        caption_pos++;
+                    }
+                }
+
+                std::cerr << "After simplification, HTML length: " << clean_html.length() << std::endl;
+                std::cerr << "Extracted HTML first 200 chars: " << clean_html.substr(0, std::min<size_t>(200, clean_html.length())) << std::endl;
+                std::cerr << "Extracted HTML last 200 chars: ";
+                if (clean_html.length() > 200)
+                {
+                    size_t start = clean_html.length() > 200 ? clean_html.length() - 200 : 0;
+                    std::cerr << clean_html.substr(start) << std::endl;
+                }
+                else
+                {
+                    std::cerr << "(too short)" << std::endl;
+                }
+                std::cerr << "Extracted HTML ends with </html>: " << (clean_html.length() >= 7 && clean_html.substr(clean_html.length()-7) == "</html>") << std::endl;
+
+                // Write to debug file
+                std::ofstream debug_file("/tmp/xeus_sas_extracted_html_debug.html");
+                if (debug_file)
+                {
+                    debug_file << clean_html;
+                    debug_file.close();
+                    std::cerr << "DEBUG: Wrote extracted HTML to /tmp/xeus_sas_extracted_html_debug.html" << std::endl;
+                }
             }
             else
             {
@@ -385,6 +642,7 @@ namespace xeus_sas
                     std::cerr << "  Last 200 chars: " << html_output.substr(start) << std::endl;
                 }
             }
+            std::cerr << "==========================================\n" << std::endl;
         }
 
         // Create result with both HTML and log
