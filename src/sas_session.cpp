@@ -147,8 +147,9 @@ namespace xeus_sas
             // -nodms: no display manager
             // -stdio: use stdin/stdout for I/O
             // -nonews: suppress startup news
+            // -nosource: suppress source code echo in log
             execlp(m_sas_path.c_str(), m_sas_path.c_str(),
-                   "-nodms", "-stdio", "-nonews", nullptr);
+                   "-nodms", "-stdio", "-nonews", "-nosource", nullptr);
 
             // If exec fails
             std::cerr << "Failed to execute SAS: " << m_sas_path << std::endl;
@@ -170,6 +171,11 @@ namespace xeus_sas
 
             // Set stdin to line buffering for immediate writes
             setvbuf(m_sas_stdin, nullptr, _IOLBF, 0);
+
+            // Note: SAS outputs startup messages (copyright, version, etc.) when started
+            // with -stdio. These will appear in the first execution's output.
+            // This is acceptable behavior - the important part is that subsequent
+            // executions don't restart SAS (which would show these messages again).
 
             m_initialized = true;
             std::cout << "Persistent SAS session initialized (PID: " << m_sas_pid << ")" << std::endl;
@@ -200,7 +206,9 @@ namespace xeus_sas
         fprintf(m_sas_stdin, "%s\n", code.c_str());
 
         // Send marker to detect end of output
+        // Note: We add a DATA _null_; RUN; after the marker to force SAS to flush output
         fprintf(m_sas_stdin, "%%put %s;\n", marker.c_str());
+        fprintf(m_sas_stdin, "DATA _null_; run;\n");
         fflush(m_sas_stdin);
 
         // Read output until we see the marker
@@ -216,9 +224,10 @@ namespace xeus_sas
             if (line.find(marker) != std::string::npos)
             {
                 found_marker = true;
-                break;
+                break;  // Don't add marker line to output
             }
 
+            // Only add non-marker lines to output
             output += line;
         }
 
