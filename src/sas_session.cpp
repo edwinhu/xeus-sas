@@ -240,10 +240,15 @@ namespace xeus_sas
 
         // Read both stdout (HTML) and stderr (log) until we see the marker
         // We need to read both streams to avoid deadlock
+        // IMPORTANT: We must wait for BOTH conditions:
+        // 1. Marker found in stderr (log)
+        // 2. Complete HTML document received (if HTML is present)
         std::string html_output;
         std::string log_output;
-        char buffer[4096];
+        char buffer[8192];  // Larger buffer for better performance
         bool found_marker = false;
+        bool found_html_end = false;
+        bool has_html_start = false;
 
         // Set stderr to non-blocking mode for polling
         int stderr_fd = fileno(m_sas_stderr);
@@ -260,15 +265,29 @@ namespace xeus_sas
         fds[1].fd = stderr_fd;
         fds[1].events = POLLIN;
 
-        while (!found_marker)
+        // Continue reading until we have both marker AND complete HTML
+        int timeout_count = 0;
+        const int max_timeouts = 10;  // Allow up to 10 seconds total
+
+        while (!found_marker || (has_html_start && !found_html_end))
         {
             int poll_result = poll(fds, 2, 1000); // 1 second timeout
             if (poll_result < 0)
             {
+                std::cerr << "Poll error in SAS output reading" << std::endl;
                 break; // Error
             }
             else if (poll_result == 0)
             {
+                timeout_count++;
+                if (timeout_count >= max_timeouts)
+                {
+                    std::cerr << "WARNING: Timeout waiting for complete SAS output" << std::endl;
+                    std::cerr << "  Marker found: " << found_marker << std::endl;
+                    std::cerr << "  HTML start found: " << has_html_start << std::endl;
+                    std::cerr << "  HTML end found: " << found_html_end << std::endl;
+                    break;
+                }
                 continue; // Timeout, try again
             }
 
@@ -278,6 +297,23 @@ namespace xeus_sas
                 if (fgets(buffer, sizeof(buffer), m_sas_stdout))
                 {
                     html_output += buffer;
+
+                    // Check for HTML document markers
+                    if (!has_html_start &&
+                        (html_output.find("<!DOCTYPE html>") != std::string::npos ||
+                         html_output.find("<html") != std::string::npos))
+                    {
+                        has_html_start = true;
+                    }
+
+                    // Check for HTML end - use rfind to get the LAST occurrence
+                    if (has_html_start && !found_html_end)
+                    {
+                        if (html_output.find("</html>") != std::string::npos)
+                        {
+                            found_html_end = true;
+                        }
+                    }
                 }
             }
 
@@ -292,11 +328,20 @@ namespace xeus_sas
                     if (line.find(marker) != std::string::npos)
                     {
                         found_marker = true;
-                        break;  // Don't add marker line to log
+                        // Don't break yet - continue reading if HTML is incomplete
+                        // Don't add marker line to log
                     }
-
-                    log_output += line;
+                    else
+                    {
+                        log_output += line;
+                    }
                 }
+            }
+
+            // Exit if we have marker and either no HTML or complete HTML
+            if (found_marker && (!has_html_start || found_html_end))
+            {
+                break;
             }
         }
 
@@ -304,14 +349,49 @@ namespace xeus_sas
         fcntl(stderr_fd, F_SETFL, stderr_flags);
         fcntl(stdout_fd, F_SETFL, stdout_flags);
 
+        // Extract clean HTML if present
+        std::string clean_html;
+        bool has_html = false;
+
+        if (has_html_start)
+        {
+            // Find HTML document boundaries
+            size_t html_start = html_output.find("<!DOCTYPE html>");
+            if (html_start == std::string::npos)
+            {
+                html_start = html_output.find("<html");
+            }
+
+            size_t html_end = html_output.rfind("</html>");  // Use rfind for LAST occurrence
+
+            if (html_start != std::string::npos && html_end != std::string::npos)
+            {
+                html_end += 7;  // Include "</html>"
+                clean_html = html_output.substr(html_start, html_end - html_start);
+                has_html = true;
+            }
+            else
+            {
+                std::cerr << "WARNING: Incomplete HTML detected" << std::endl;
+                std::cerr << "  HTML start position: " << html_start << std::endl;
+                std::cerr << "  HTML end position: " << html_end << std::endl;
+                std::cerr << "  Total output length: " << html_output.length() << std::endl;
+
+                // Log first and last 200 chars for debugging
+                std::cerr << "  First 200 chars: " << html_output.substr(0, 200) << std::endl;
+                if (html_output.length() > 200)
+                {
+                    size_t start = html_output.length() > 200 ? html_output.length() - 200 : 0;
+                    std::cerr << "  Last 200 chars: " << html_output.substr(start) << std::endl;
+                }
+            }
+        }
+
         // Create result with both HTML and log
         execution_result result;
         result.log = log_output;
-        result.html_output = html_output;
-
-        // Detect if we have HTML output
-        result.has_html = (html_output.find("<!DOCTYPE html>") != std::string::npos ||
-                          html_output.find("<html") != std::string::npos);
+        result.html_output = clean_html;  // Use extracted clean HTML
+        result.has_html = has_html;
 
         // Check for errors in log
         int error_code = 0;
