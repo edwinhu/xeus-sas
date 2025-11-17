@@ -25,6 +25,73 @@ This is the initial implementation providing:
 - Basic inspection/help system
 - CMake build system
 
+## Quick Start
+
+### Prerequisites
+
+**Install dependencies via conda/mamba:**
+
+```bash
+# Install mambaforge (if not already installed)
+# macOS: brew install mambaforge
+# Linux: wget https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh
+
+# Install xeus dependencies
+mamba install xeus xeus-zmq xtl nlohmann_json cmake -c conda-forge
+```
+
+**Set SAS path (if not in PATH):**
+
+```bash
+export SAS_PATH=/path/to/sas/executable
+# Add to ~/.bashrc or ~/.zshrc for persistence
+```
+
+### Build and Install
+
+```bash
+git clone https://github.com/edwinhu/xeus-sas.git
+cd xeus-sas
+mkdir build && cd build
+
+cmake .. \
+    -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX \
+    -DCMAKE_PREFIX_PATH=$CONDA_PREFIX \
+    -DBUILD_TESTS=ON
+
+make -j4
+make install
+
+# Verify installation
+jupyter kernelspec list  # Should show 'xeus-sas'
+```
+
+### Try It Out
+
+```bash
+jupyter notebook
+```
+
+Create a new notebook with the SAS kernel and run:
+
+```sas
+/* Create a sample dataset */
+DATA work.test;
+    INPUT name $ age;
+    DATALINES;
+Alice 25
+Bob 30
+Charlie 35
+;
+RUN;
+
+/* Print the dataset */
+PROC PRINT DATA=work.test;
+RUN;
+```
+
+For detailed troubleshooting and advanced usage, see the internal documentation in `.claude/QUICKSTART.md`.
+
 ## Requirements
 
 ### System Requirements
@@ -58,7 +125,7 @@ This is the initial implementation providing:
 
 ```bash
 # Clone the repository
-git clone https://github.com/jupyter-xeus/xeus-sas.git
+git clone https://github.com/edwinhu/xeus-sas.git
 cd xeus-sas
 
 # Create build directory
@@ -171,7 +238,7 @@ xeus-sas consists of several key components:
 - **completion_engine**: Provides code completion
 - **inspection_engine**: Provides inline help and documentation
 
-See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for detailed architecture documentation.
+See [.claude/IMPLEMENTATION_PLAN.md](.claude/IMPLEMENTATION_PLAN.md) for detailed architecture documentation.
 
 ## Development
 
@@ -260,7 +327,7 @@ BSD-3-Clause License. See [LICENSE](LICENSE) for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/jupyter-xeus/xeus-sas/issues)
+- **Issues**: [GitHub Issues](https://github.com/edwinhu/xeus-sas/issues)
 - **Documentation**: [Read the Docs](https://xeus-sas.readthedocs.io)
 - **SAS Documentation**: [documentation.sas.com](https://documentation.sas.com/)
 

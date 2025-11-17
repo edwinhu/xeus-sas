@@ -67,6 +67,10 @@ docs/generated/
 tmp/
 temp/
 *.tmp
+
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Claude AI internal documentation and testing
+.claude/

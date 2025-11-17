@@ -264,7 +264,7 @@ By contributing to xeus-sas, you agree that your contributions will be licensed 
 
 ## Questions?
 
-- Open a [GitHub Discussion](https://github.com/jupyter-xeus/xeus-sas/discussions)
+- Open a [GitHub Discussion](https://github.com/edwinhu/xeus-sas/discussions)
 - Join the [xeus Gitter channel](https://gitter.im/QuantStack/Lobby)
 - Email the maintainers (see AUTHORS.md)
 
