@@ -83,6 +83,14 @@ namespace xeus_sas
         void interrupt();
 
         /**
+         * @brief Restart the SAS session
+         *
+         * Kills the current SAS process and starts a fresh one.
+         * WARNING: This loses all session state (datasets, macro variables).
+         */
+        void restart();
+
+        /**
          * @brief Get value of a SAS macro variable
          * @param name Macro variable name (without %)
          * @return Macro variable value

@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <memory>
 #include <regex>
+#include <thread>
+#include <chrono>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,6 +38,7 @@ namespace xeus_sas
         bool is_ready() const;
         void shutdown();
         void interrupt();
+        void restart();
         std::string get_macro(const std::string& name);
         void set_macro(const std::string& name, const std::string& value);
 
@@ -1050,6 +1053,23 @@ namespace xeus_sas
 #endif
     }
 
+    void sas_session::impl::restart()
+    {
+        std::cerr << "=== RESTARTING SAS SESSION ===" << std::endl;
+
+        // Shutdown the current session
+        shutdown();
+
+        // Wait a moment for cleanup
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Reinitialize the session
+        initialize_session();
+
+        std::cerr << "=== SAS SESSION RESTARTED ===" << std::endl;
+        std::cerr << "WARNING: Session state lost (datasets, macro variables cleared)" << std::endl;
+    }
+
     std::string sas_session::impl::get_macro(const std::string& name)
     {
         // Execute %PUT to get macro value
@@ -1103,6 +1123,11 @@ namespace xeus_sas
     void sas_session::interrupt()
     {
         m_impl->interrupt();
+    }
+
+    void sas_session::restart()
+    {
+        m_impl->restart();
     }
 
     std::string sas_session::get_macro(const std::string& name)
