@@ -224,9 +224,14 @@ namespace xeus_sas
         // - Close HTML5 and restore listing
         std::cerr << "\n=== CODE RECEIVED ===\n" << code << "\n=====================\n" << std::endl;
 
+        // Allow user to override ODS style via environment variable
+        // Default to HTMLBlue if not set
+        const char* user_style = std::getenv("XEUS_SAS_ODS_STYLE");
+        std::string ods_style = user_style ? user_style : "HTMLBlue";
+
         std::stringstream wrapped_code;
         wrapped_code << "ods listing close;\n"
-                     << "ods html5 (id=xeus_sas_internal) file=stdout style=Default;\n"
+                     << "ods html5 (id=xeus_sas_internal) file=stdout style=" << ods_style << ";\n"
                      << "ods graphics on / outputfmt=png;\n"
                      << "\n"
                      << code << "\n"
