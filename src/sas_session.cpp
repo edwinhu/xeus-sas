@@ -609,6 +609,204 @@ namespace xeus_sas
                     }
                 }
 
+                // CRITICAL FIX: Flatten rowspan/colspan attributes for PROC TABULATE
+                // Terminal renderers like euporie cannot handle complex table spans properly
+                // We need to duplicate cells that span multiple rows/columns
+                std::cerr << "Flattening rowspan/colspan attributes..." << std::endl;
+
+                // First, parse the table structure to understand row/column layout
+                size_t table_start = clean_html.find("<table");
+                if (table_start != std::string::npos)
+                {
+                    size_t table_end = clean_html.find("</table>", table_start);
+                    if (table_end != std::string::npos)
+                    {
+                        // Extract just the table content for processing
+                        std::string before_table = clean_html.substr(0, table_start);
+                        std::string after_table = clean_html.substr(table_end);
+                        std::string table_html = clean_html.substr(table_start, table_end - table_start);
+
+                        // Build a grid representation of the table
+                        std::vector<std::vector<std::string>> grid;
+                        std::vector<std::vector<bool>> cell_occupied;
+
+                        // Parse rows (both thead and tbody)
+                        size_t row_pos = 0;
+                        int current_row = 0;
+
+                        while ((row_pos = table_html.find("<tr", row_pos)) != std::string::npos)
+                        {
+                            size_t row_end = table_html.find("</tr>", row_pos);
+                            if (row_end == std::string::npos) break;
+
+                            std::string row_content = table_html.substr(row_pos, row_end - row_pos);
+
+                            // Ensure we have enough rows in our grid
+                            if (current_row >= grid.size())
+                            {
+                                grid.resize(current_row + 1);
+                                cell_occupied.resize(current_row + 1);
+                            }
+
+                            // Parse cells in this row
+                            size_t cell_pos = 0;
+                            int current_col = 0;
+
+                            // Find the next available column (skip occupied cells from rowspan)
+                            auto find_next_col = [&]() {
+                                while (current_col < cell_occupied[current_row].size() &&
+                                       cell_occupied[current_row][current_col])
+                                {
+                                    current_col++;
+                                }
+                            };
+
+                            while (true)
+                            {
+                                // Find next cell (th or td)
+                                size_t th_pos = row_content.find("<th", cell_pos);
+                                size_t td_pos = row_content.find("<td", cell_pos);
+                                size_t next_cell = std::min(
+                                    th_pos == std::string::npos ? std::string::npos : th_pos,
+                                    td_pos == std::string::npos ? std::string::npos : td_pos
+                                );
+
+                                if (next_cell == std::string::npos) break;
+
+                                bool is_th = (next_cell == th_pos);
+                                std::string cell_tag = is_th ? "th" : "td";
+                                size_t cell_end = row_content.find("</" + cell_tag + ">", next_cell);
+                                if (cell_end == std::string::npos) break;
+
+                                std::string cell_content = row_content.substr(next_cell, cell_end - next_cell + cell_tag.length() + 3);
+
+                                // Extract rowspan and colspan attributes
+                                int rowspan = 1, colspan = 1;
+                                size_t rowspan_pos = cell_content.find("rowspan=\"");
+                                if (rowspan_pos != std::string::npos)
+                                {
+                                    size_t value_start = rowspan_pos + 9;
+                                    size_t value_end = cell_content.find("\"", value_start);
+                                    if (value_end != std::string::npos)
+                                    {
+                                        rowspan = std::stoi(cell_content.substr(value_start, value_end - value_start));
+                                    }
+                                }
+
+                                size_t colspan_pos = cell_content.find("colspan=\"");
+                                if (colspan_pos != std::string::npos)
+                                {
+                                    size_t value_start = colspan_pos + 9;
+                                    size_t value_end = cell_content.find("\"", value_start);
+                                    if (value_end != std::string::npos)
+                                    {
+                                        colspan = std::stoi(cell_content.substr(value_start, value_end - value_start));
+                                    }
+                                }
+
+                                // Extract cell inner content (between tags)
+                                size_t content_start = cell_content.find(">") + 1;
+                                size_t content_end = cell_content.rfind("</");
+                                std::string inner_content = cell_content.substr(content_start, content_end - content_start);
+
+                                // Remove rowspan/colspan from the cell tag
+                                std::string cleaned_cell = cell_content;
+                                if (rowspan_pos != std::string::npos)
+                                {
+                                    size_t attr_start = rowspan_pos;
+                                    size_t attr_end = cell_content.find("\"", rowspan_pos + 9) + 1;
+                                    cleaned_cell.erase(attr_start, attr_end - attr_start);
+                                    // Remove leading space if present
+                                    if (cleaned_cell[attr_start] == ' ') cleaned_cell.erase(attr_start, 1);
+                                }
+                                if (colspan_pos != std::string::npos)
+                                {
+                                    // Recalculate position after potential rowspan removal
+                                    colspan_pos = cleaned_cell.find("colspan=\"");
+                                    if (colspan_pos != std::string::npos)
+                                    {
+                                        size_t attr_start = colspan_pos;
+                                        size_t attr_end = cleaned_cell.find("\"", colspan_pos + 9) + 1;
+                                        cleaned_cell.erase(attr_start, attr_end - attr_start);
+                                        if (cleaned_cell[attr_start] == ' ') cleaned_cell.erase(attr_start, 1);
+                                    }
+                                }
+
+                                // Find next available column for this cell
+                                find_next_col();
+
+                                // Mark grid positions as occupied for this cell and its span
+                                // For rowspan cells, we'll place the content in the LAST row (bottom-aligned)
+                                // and use empty cells for the earlier rows
+                                for (int r = 0; r < rowspan; r++)
+                                {
+                                    int row_idx = current_row + r;
+                                    if (row_idx >= grid.size())
+                                    {
+                                        grid.resize(row_idx + 1);
+                                        cell_occupied.resize(row_idx + 1);
+                                    }
+
+                                    for (int c = 0; c < colspan; c++)
+                                    {
+                                        int col_idx = current_col + c;
+                                        if (col_idx >= grid[row_idx].size())
+                                        {
+                                            grid[row_idx].resize(col_idx + 1);
+                                            cell_occupied[row_idx].resize(col_idx + 1, false);
+                                        }
+
+                                        // For cells with rowspan, only store content in the last row
+                                        // Use empty cells for earlier rows in the span
+                                        if (rowspan > 1 && r < rowspan - 1)
+                                        {
+                                            // Empty cell for non-last rows in a rowspan
+                                            grid[row_idx][col_idx] = "<td>&#160;</td>";
+                                        }
+                                        else
+                                        {
+                                            // Normal cell or last row of rowspan gets the content
+                                            grid[row_idx][col_idx] = cleaned_cell;
+                                        }
+                                        cell_occupied[row_idx][col_idx] = true;
+                                    }
+                                }
+
+                                current_col += colspan;
+                                cell_pos = cell_end + cell_tag.length() + 3;
+                            }
+
+                            current_row++;
+                            row_pos = row_end + 5;
+                        }
+
+                        // Now reconstruct the table from the grid
+                        std::ostringstream new_table;
+                        new_table << "<table class=\"table\">";
+                        new_table << "<tbody>";
+
+                        for (size_t r = 0; r < grid.size(); r++)
+                        {
+                            new_table << "<tr>";
+                            for (size_t c = 0; c < grid[r].size(); c++)
+                            {
+                                if (!grid[r][c].empty())
+                                {
+                                    new_table << grid[r][c];
+                                }
+                            }
+                            new_table << "</tr>";
+                        }
+
+                        new_table << "</tbody>";
+                        new_table << "</table>";
+
+                        // Reconstruct the full HTML
+                        clean_html = before_table + new_table.str() + after_table;
+                        std::cerr << "Flattened table structure (removed rowspan/colspan)" << std::endl;
+                    }
+                }
+
                 std::cerr << "After simplification, HTML length: " << clean_html.length() << std::endl;
                 std::cerr << "Extracted HTML first 200 chars: " << clean_html.substr(0, std::min<size_t>(200, clean_html.length())) << std::endl;
                 std::cerr << "Extracted HTML last 200 chars: ";
