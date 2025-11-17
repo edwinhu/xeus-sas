@@ -18,7 +18,8 @@ xeus-sas is a Jupyter kernel for SAS that enables interactive SAS programming in
 **Phase 1 (Foundation)** - Current Implementation
 
 This is the initial implementation providing:
-- Basic SAS code execution in batch mode
+- **Persistent interactive SAS sessions** - Single SAS process maintained across executions
+- **Rich HTML output** - ODS HTML5 tables and plots with terminal client support (euporie)
 - Log and listing output parsing
 - Error detection and display
 - Code completion for common procedures and keywords
@@ -115,7 +116,6 @@ For detailed troubleshooting and advanced usage, see the internal documentation 
 ### SAS Requirements
 
 - SAS 9.4 or later
-- Batch/non-interactive mode support
 - SAS/STAT recommended
 - ODS Graphics enabled (for graphics support)
 
@@ -196,8 +196,11 @@ RUN;
 
 ### Code Execution
 
-The kernel executes SAS code in batch mode and intelligently displays output:
+The kernel maintains a persistent interactive SAS session and intelligently displays output:
 
+- **Persistent session**: Single SAS process maintained across all code executions, preserving datasets and macro variables
+- **Rich HTML output**: ODS HTML5 tables and plots rendered inline (PROC PRINT, PROC TABULATE, PROC SGPLOT, etc.)
+- **Terminal support**: Enhanced HTML post-processing for terminal-based clients like euporie console
 - **Errors**: Shows colorized log with error messages highlighted
 - **Successful execution**: Shows listing output (procedure results)
 - **Graphics**: Automatically displays ODS graphics inline
@@ -282,11 +285,13 @@ xeus-sas/
 - Enhanced procedure help
 - Macro introspection
 
-### Phase 4: Advanced Features (Planned)
-- Interactive SAS session (vs batch mode)
-- Interrupt handling
-- Session restart
-- Macro variable access via user_expressions
+### Phase 4: Advanced Features (In Progress)
+- ✅ Persistent interactive SAS session
+- ✅ Rich HTML output (ODS HTML5)
+- ✅ Terminal client support (euporie)
+- Interrupt handling (planned)
+- Session restart (planned)
+- Macro variable access via user_expressions (planned)
 
 ### Phase 5: Testing & Documentation (Planned)
 - Comprehensive test suite
