@@ -56,21 +56,46 @@ namespace xeus_sas
 
     bool contains_error(const std::string& log, int& error_code)
     {
-        // Search for ERROR: lines
-        std::regex error_regex(R"(ERROR(?:\s+(\d+))?:\s*)", std::regex::icase);
-        std::smatch match;
+        // Search for ERROR: lines, but filter out benign ones
+        std::regex error_regex(R"(ERROR(?:\s+(\d+))?:\s*(.*))", std::regex::icase);
+        std::sregex_iterator iter(log.begin(), log.end(), error_regex);
+        std::sregex_iterator end;
 
-        if (std::regex_search(log, match, error_regex))
+        // Patterns for benign errors that should be ignored
+        std::vector<std::string> benign_patterns = {
+            "SASUSER.PROFILE",
+            "Page validation error",
+            "Expecting page"
+        };
+
+        while (iter != end)
         {
-            if (match.size() > 1 && match[1].matched)
+            std::string error_text = (*iter)[2].str();
+            bool is_benign = false;
+
+            for (const auto& pattern : benign_patterns)
             {
-                error_code = std::stoi(match[1].str());
+                if (error_text.find(pattern) != std::string::npos)
+                {
+                    is_benign = true;
+                    break;
+                }
             }
-            else
+
+            if (!is_benign)
             {
-                error_code = 1; // Generic error code
+                // Real error found
+                if ((*iter)[1].matched)
+                {
+                    error_code = std::stoi((*iter)[1].str());
+                }
+                else
+                {
+                    error_code = 1; // Generic error code
+                }
+                return true;
             }
-            return true;
+            ++iter;
         }
 
         return false;

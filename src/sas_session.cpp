@@ -239,7 +239,7 @@ namespace xeus_sas
 
         std::stringstream wrapped_code;
         wrapped_code << "ods listing close;\n"
-                     << "ods html5 (id=xeus_sas_internal) file=stdout style=" << ods_style << ";\n"
+                     << "ods html5 (id=xeus_sas_internal) body=stdout(no_top_matter no_bottom_matter) style=" << ods_style << ";\n"
                      << "ods graphics on / outputfmt=png;\n"
                      << "\n"
                      << code << "\n"
@@ -345,18 +345,23 @@ namespace xeus_sas
                     buffer[bytes_read] = '\0';  // Null terminate
                     html_output.append(buffer, bytes_read);
 
-                    // Check for HTML document markers
+                    // Check for HTML document markers (full document or fragment)
                     if (!has_html_start &&
                         (html_output.find("<!DOCTYPE html>") != std::string::npos ||
-                         html_output.find("<html") != std::string::npos))
+                         html_output.find("<html") != std::string::npos ||
+                         html_output.find("<div") != std::string::npos ||
+                         html_output.find("<table") != std::string::npos))
                     {
                         has_html_start = true;
                     }
 
                     // Check for HTML end - use rfind to get the LAST occurrence
+                    // For fragments (no_top_matter), we don't need </html>
                     if (has_html_start && !found_html_end)
                     {
-                        if (html_output.find("</html>") != std::string::npos)
+                        if (html_output.find("</html>") != std::string::npos ||
+                            html_output.find("</div>") != std::string::npos ||
+                            html_output.find("</table>") != std::string::npos)
                         {
                             found_html_end = true;
                         }
@@ -426,22 +431,49 @@ namespace xeus_sas
             }
             std::cerr << "==========================================\n" << std::endl;
 
-            // Find HTML document boundaries
+            // Find HTML document boundaries (support full docs and fragments)
             size_t html_start = html_output.find("<!DOCTYPE html>");
             if (html_start == std::string::npos)
             {
                 html_start = html_output.find("<html");
             }
 
+            // Check for fragment HTML (no_top_matter output)
+            bool is_fragment = false;
+            if (html_start == std::string::npos)
+            {
+                // Try to find fragment start (<div> or <table>)
+                html_start = html_output.find("<div");
+                if (html_start == std::string::npos)
+                {
+                    html_start = html_output.find("<table");
+                }
+                is_fragment = (html_start != std::string::npos);
+            }
+
             size_t html_end = html_output.rfind("</html>");  // Use rfind for LAST occurrence
+            size_t end_offset = 7;  // Length of "</html>"
+
+            // For fragments, look for </div> or </table> instead
+            if (is_fragment || html_end == std::string::npos)
+            {
+                html_end = html_output.rfind("</div>");
+                end_offset = 6;
+                if (html_end == std::string::npos)
+                {
+                    html_end = html_output.rfind("</table>");
+                    end_offset = 8;
+                }
+            }
 
             std::cerr << "=== SAS_SESSION: HTML EXTRACTION DEBUG ===" << std::endl;
             std::cerr << "html_start position: " << html_start << std::endl;
             std::cerr << "html_end position: " << html_end << std::endl;
+            std::cerr << "is_fragment: " << is_fragment << std::endl;
 
             if (html_start != std::string::npos && html_end != std::string::npos)
             {
-                html_end += 7;  // Include "</html>"
+                html_end += end_offset;  // Include closing tag
                 clean_html = html_output.substr(html_start, html_end - html_start);
                 has_html = true;
 
