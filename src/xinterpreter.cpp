@@ -147,8 +147,43 @@ namespace xeus_sas
                     std::cerr << "======================================" << std::endl;
 
                     // Display rich HTML output using display_data
+                    // Inject booktabs-style CSS for tables
+                    std::string styled_output = "<style>\n"
+                        ".sas-table, .sas-table table, table.table {\n"
+                        "  border-collapse: collapse;\n"
+                        "  border: none;\n"
+                        "}\n"
+                        ".sas-table td, .sas-table th,\n"
+                        "table.table td, table.table th {\n"
+                        "  border: none;\n"
+                        "  padding: 4px 8px;\n"
+                        "}\n"
+                        "/* Toprule: first row with headers */\n"
+                        ".sas-table tbody tr:first-child th,\n"
+                        ".sas-table tbody tr:first-child td,\n"
+                        "table.table tbody tr:first-child th,\n"
+                        "table.table tbody tr:first-child td {\n"
+                        "  border-top: 2px solid currentcolor;\n"
+                        "}\n"
+                        "/* Midrule: after header rows (rows with .header class) */\n"
+                        ".sas-table tbody tr:has(.header) + tr:not(:has(.header)) td,\n"
+                        ".sas-table tbody tr:has(.header) + tr:not(:has(.header)) th,\n"
+                        "table.table tbody tr:has(.header) + tr:not(:has(.header)) td,\n"
+                        "table.table tbody tr:has(.header) + tr:not(:has(.header)) th {\n"
+                        "  border-top: 1px solid currentcolor;\n"
+                        "}\n"
+                        "/* Bottomrule: last row */\n"
+                        ".sas-table tbody tr:last-child td,\n"
+                        ".sas-table tbody tr:last-child th,\n"
+                        "table.table tbody tr:last-child td,\n"
+                        "table.table tbody tr:last-child th {\n"
+                        "  border-bottom: 2px solid currentcolor;\n"
+                        "}\n"
+                        "</style>\n";
+                    styled_output += result.html_output;
+
                     nl::json html_data;
-                    html_data["text/html"] = result.html_output;
+                    html_data["text/html"] = styled_output;
 
                     // Also include plain text fallback (log)
                     if (!result.log.empty())
