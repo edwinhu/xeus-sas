@@ -9,6 +9,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <regex>
 #include <sstream>
 #include <atomic>
 
@@ -174,10 +175,57 @@ namespace xeus_sas
                     // Determine what to display
                     if (should_show_listing(result))
                     {
-                        // Show listing output
+                        // Show listing output with theme-adaptive styling
                         if (!result.listing.empty())
                         {
-                            publish_stream("stdout", result.listing);
+                            // Strip XEUS_SAS_END markers from listing
+                            std::string clean_listing = result.listing;
+                            std::regex marker_regex(R"(XEUS_SAS_END_\d+\s*)");
+                            clean_listing = std::regex_replace(clean_listing, marker_regex, "");
+
+                            // Trim trailing whitespace
+                            clean_listing.erase(clean_listing.find_last_not_of(" \n\r\t") + 1);
+
+                            if (!clean_listing.empty())
+                            {
+                                // Wrap in styled HTML for consistent appearance
+                                std::string styled_html = "<style>\n"
+                                    ".sas-listing {\n"
+                                    "  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, 'DejaVu Sans Mono', Consolas, monospace;\n"
+                                    "  font-size: 12px;\n"
+                                    "  font-variant-ligatures: none;\n"
+                                    "  color: inherit;\n"
+                                    "  background-color: transparent;\n"
+                                    "  padding: 10px;\n"
+                                    "  border: 1px solid currentcolor;\n"
+                                    "  border-radius: 3px;\n"
+                                    "  opacity: 0.6;\n"
+                                    "  overflow-x: auto;\n"
+                                    "  margin: 0;\n"
+                                    "  line-height: 1.4;\n"
+                                    "  white-space: pre;\n"
+                                    "}\n"
+                                    "</style>\n"
+                                    "<pre class=\"sas-listing\">";
+
+                                // HTML escape the listing content
+                                for (char c : clean_listing)
+                                {
+                                    switch (c)
+                                    {
+                                        case '<': styled_html += "&lt;"; break;
+                                        case '>': styled_html += "&gt;"; break;
+                                        case '&': styled_html += "&amp;"; break;
+                                        default: styled_html += c;
+                                    }
+                                }
+                                styled_html += "</pre>";
+
+                                nl::json html_data;
+                                html_data["text/html"] = styled_html;
+                                html_data["text/plain"] = clean_listing;
+                                publish_execution_result(execution_counter, std::move(html_data), nl::json::object());
+                            }
                         }
                     }
                     else

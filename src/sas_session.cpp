@@ -2,6 +2,7 @@
 #include "xeus-sas/sas_parser.hpp"
 #include "xeus-sas/xeus_sas_config.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -237,17 +238,42 @@ namespace xeus_sas
         const char* user_style = std::getenv("XEUS_SAS_ODS_STYLE");
         std::string ods_style = user_style ? user_style : "HTMLBlue";
 
+        // Check if user code explicitly manages ODS destinations
+        // If so, don't wrap with our ODS HTML5 commands
+        std::string code_lower = code;
+        std::transform(code_lower.begin(), code_lower.end(), code_lower.begin(), ::tolower);
+        bool user_manages_ods = (code_lower.find("ods listing") != std::string::npos ||
+                                  code_lower.find("ods html") != std::string::npos ||
+                                  code_lower.find("ods pdf") != std::string::npos ||
+                                  code_lower.find("ods rtf") != std::string::npos);
+
         std::stringstream wrapped_code;
-        wrapped_code << "ods listing close;\n"
-                     << "ods html5 (id=xeus_sas_internal) body=stdout(no_top_matter no_bottom_matter) style=" << ods_style << ";\n"
-                     << "ods graphics on / outputfmt=png;\n"
-                     << "\n"
-                     << code << "\n"
-                     << "\n"
-                     << "ods html5 (id=xeus_sas_internal) close;\n"
-                     << "ods listing;\n"
-                     << "* Force flush of all output before marker;\n"
-                     << "DATA _null_; run;\n";
+        std::string listing_file = "/tmp/xeus_sas_listing_" + std::to_string(exec_counter) + ".lst";
+        if (user_manages_ods)
+        {
+            // User is managing ODS destinations - run code as-is
+            // Capture any listing output to a file by setting PROC PRINTTO
+            std::cerr << "User manages ODS destinations - using listing mode" << std::endl;
+            wrapped_code << "proc printto print='" << listing_file << "' new; run;\n"
+                         << code << "\n"
+                         << "proc printto; run;\n"
+                         << "* Force flush of all output before marker;\n"
+                         << "DATA _null_; run;\n";
+        }
+        else
+        {
+            // Default: wrap with HTML5 for rich output
+            wrapped_code << "ods listing close;\n"
+                         << "ods html5 (id=xeus_sas_internal) body=stdout(no_top_matter no_bottom_matter) style=" << ods_style << ";\n"
+                         << "ods graphics on / outputfmt=png;\n"
+                         << "\n"
+                         << code << "\n"
+                         << "\n"
+                         << "ods html5 (id=xeus_sas_internal) close;\n"
+                         << "ods listing;\n"
+                         << "* Force flush of all output before marker;\n"
+                         << "DATA _null_; run;\n";
+        }
 
         // Send wrapped code to SAS
         fprintf(m_sas_stdin, "%s\n", wrapped_code.str().c_str());
@@ -915,9 +941,26 @@ namespace xeus_sas
             std::cerr << "==========================================\n" << std::endl;
         }
 
+        // Read listing file if user managed ODS destinations
+        std::string listing_content;
+        if (user_manages_ods)
+        {
+            std::ifstream lst_file(listing_file);
+            if (lst_file)
+            {
+                std::stringstream lst_ss;
+                lst_ss << lst_file.rdbuf();
+                listing_content = lst_ss.str();
+                std::cerr << "Read listing file (" << listing_content.length() << " bytes)" << std::endl;
+            }
+            // Clean up temp file
+            std::remove(listing_file.c_str());
+        }
+
         // Create result with both HTML and log
         execution_result result;
         result.log = log_output;
+        result.listing = listing_content;
         result.html_output = clean_html;  // Use extracted clean HTML
         result.has_html = has_html;
 
