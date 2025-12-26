@@ -523,6 +523,33 @@ namespace xeus_sas
                     clean_html = clean_html.substr(0, first_colgroup) + new_colgroup + clean_html.substr(last_colgroup_end);
                 }
 
+                // Remove "The SAS System" title container (systitleandfootercontainer div)
+                size_t title_pos = 0;
+                while ((title_pos = clean_html.find("systitleandfootercontainer", title_pos)) != std::string::npos)
+                {
+                    // Find the opening <div that contains this class
+                    size_t div_start = clean_html.rfind("<div", title_pos);
+                    if (div_start != std::string::npos)
+                    {
+                        // Find the matching </div>
+                        size_t div_end = clean_html.find("</div>", title_pos);
+                        if (div_end != std::string::npos)
+                        {
+                            clean_html.erase(div_start, div_end + 6 - div_start);
+                            // Search from beginning since we modified the string
+                            title_pos = 0;
+                        }
+                        else
+                        {
+                            title_pos++;
+                        }
+                    }
+                    else
+                    {
+                        title_pos++;
+                    }
+                }
+
                 // Additional simplification: remove inline styles that might confuse terminal renderers
                 // Remove style attributes from table and other elements
                 size_t style_pos = 0;
